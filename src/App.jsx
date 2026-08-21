@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Shield, MapPin, Users, Phone, X, Check, AlertTriangle, Radio, ChevronRight, UserPlus, Clock } from "lucide-react";
-import { pushUserLiveAlert, clearUserLiveAlert, subscribeAllUsers } from "./firebase";
+import { Shield, MapPin, Users, Phone, X, Check, AlertTriangle, Radio, ChevronRight, UserPlus, Clock, Eye } from "lucide-react";
+import { pushUserLiveAlert, clearUserLiveAlert, subscribeAllUsers, subscribeProfileList, getProfile, createProfile, saveProfileContacts, getAdminPasswordHash, setAdminPasswordHash } from "./firebase";
 
 // ---------- Helpers ----------
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -15,33 +15,6 @@ const fmtElapsed = (ts) => {
   const m = Math.floor(s / 60);
   const sec = s % 60;
   return `${m}:${sec.toString().padStart(2, "0")}`;
-};
-
-// Demo contacts (Fizza / Shahmeer / Bilal per the user's own test setup)
-const DEFAULT_CONTACTS = [
-  { id: uid(), name: "Fizza (épouse)", role: "Contact principal", initials: "FZ", phone: "" },
-  { id: uid(), name: "Shahmeer (époux)", role: "Contact principal", initials: "SH", phone: "" },
-  { id: uid(), name: "Bilal (frère)", role: "Contact secondaire", initials: "BL", phone: "" },
-];
-
-const CONTACTS_KEY = "rakhwaal_contacts_v1";
-
-const loadContacts = () => {
-  try {
-    const raw = localStorage.getItem(CONTACTS_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch (e) {
-    /* localStorage unavailable — fall back to defaults */
-  }
-  return DEFAULT_CONTACTS;
-};
-
-const saveContacts = (contacts) => {
-  try {
-    localStorage.setItem(CONTACTS_KEY, JSON.stringify(contacts));
-  } catch (e) {
-    /* ignore persistence failures */
-  }
 };
 
 const initialsOf = (name) =>
@@ -64,14 +37,40 @@ const buildWaUrl = (contact, senderName) => {
   return `https://wa.me/${contact.phone}?text=${encodeURIComponent(text)}`;
 };
 
-// ---------- Identity (no login — a locally-remembered "who is using this device") ----------
-const IDENTITY_KEY = "rakhwaal_identity_v1";
+// ---------- Contacts <-> Firebase object conversion ----------
+// Firebase stores objects, not arrays, so contacts are keyed by id there
+// and converted to/from a plain array for use in React state.
+const contactsToObj = (contacts) =>
+  contacts.reduce((acc, c) => {
+    acc[c.id] = c;
+    return acc;
+  }, {});
 
-const IDENTITY_PRESETS = [
-  { id: "shahmeer", name: "Shahmeer", initials: "SH" },
-  { id: "fizza", name: "Fizza", initials: "FZ" },
-  { id: "bilal", name: "Bilal", initials: "BL" },
-];
+const contactsFromObj = (obj) => (obj ? Object.values(obj) : []);
+
+// ---------- Password hashing (client-side, test-grade only) ----------
+// This is NOT real security — it only stops someone from casually picking
+// a family member's profile and seeing their contacts. Anyone with direct
+// database access could still read the hash. Good enough for a private test.
+async function hashPassword(pw) {
+  const enc = new TextEncoder().encode(pw);
+  const buf = await crypto.subtle.digest("SHA-256", enc);
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+const slugify = (name) =>
+  name
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+
+// ---------- Identity (device-remembered session, backed by a Firebase profile) ----------
+const IDENTITY_KEY = "rakhwaal_identity_v1";
 
 const loadIdentity = () => {
   try {
@@ -99,6 +98,7 @@ const clearIdentity = () => {
   }
 };
 
+
 export default function RakhwaalApp() {
   const [identity, setIdentity] = useState(loadIdentity);
   const [view, setView] = useState("user"); // "user" | "family"
@@ -107,10 +107,11 @@ export default function RakhwaalApp() {
   const [position, setPosition] = useState(null);
   const [alertStart, setAlertStart] = useState(null);
   const [pathTrail, setPathTrail] = useState([]);
-  const [contacts, setContacts] = useState(loadContacts);
+  const [contacts, setContacts] = useState([]);
   const [locError, setLocError] = useState(null);
   const [now, setNow] = useState(Date.now());
   const [showContactsModal, setShowContactsModal] = useState(false);
+  const [showAdmin, setShowAdmin] = useState(false);
   const [allUsers, setAllUsers] = useState({}); // data read from Firebase — every family member's live status
 
   // Subscribe once to the shared Firebase channel so the "Famille" view
@@ -120,23 +121,42 @@ export default function RakhwaalApp() {
     return unsubscribe;
   }, []);
 
+  // Load this profile's own contacts from Firebase once logged in — each
+  // profile has its own private contact list, not shared across accounts.
+  // Fetched fresh (not from localStorage) so it stays correct even if the
+  // same profile was edited from a different device.
   useEffect(() => {
-    saveContacts(contacts);
-  }, [contacts]);
+    if (!identity) {
+      setContacts([]);
+      return;
+    }
+    let cancelled = false;
+    getProfile(identity.id).then((profile) => {
+      if (!cancelled) setContacts(contactsFromObj(profile?.contacts));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [identity?.id]);
+
+  const persistContacts = (nextContacts) => {
+    setContacts(nextContacts);
+    if (identity) saveProfileContacts(identity.id, contactsToObj(nextContacts));
+  };
 
   const addContact = (name, phone) => {
-    setContacts((prev) => [
-      ...prev,
+    persistContacts([
+      ...contacts,
       { id: uid(), name, phone: digitsOnly(phone), role: "Contact d'urgence", initials: initialsOf(name) },
     ]);
   };
 
   const removeContact = (id) => {
-    setContacts((prev) => prev.filter((c) => c.id !== id));
+    persistContacts(contacts.filter((c) => c.id !== id));
   };
 
   const updateContactPhone = (id, phone) => {
-    setContacts((prev) => prev.map((c) => (c.id === id ? { ...c, phone: digitsOnly(phone) } : c)));
+    persistContacts(contacts.map((c) => (c.id === id ? { ...c, phone: digitsOnly(phone) } : c)));
   };
 
   const holdTimer = useRef(null);
@@ -279,7 +299,8 @@ export default function RakhwaalApp() {
     if (identity) clearUserLiveAlert(identity.id, identity.name);
   };
 
-  const chooseIdentity = (person) => {
+  const chooseIdentity = (profile) => {
+    const person = { id: profile.id, name: profile.name, initials: profile.initials };
     saveIdentity(person);
     setIdentity(person);
   };
@@ -297,7 +318,7 @@ export default function RakhwaalApp() {
     return (
       <div style={styles.app}>
         <style>{fontImport}</style>
-        <IdentityPicker contacts={contacts} onChoose={chooseIdentity} />
+        <IdentityPicker onChoose={chooseIdentity} />
       </div>
     );
   }
@@ -305,7 +326,7 @@ export default function RakhwaalApp() {
   return (
     <div style={styles.app}>
       <style>{fontImport}</style>
-      <TopBar view={view} setView={setView} status={status} identity={identity} onSwitchIdentity={switchIdentity} />
+      <TopBar view={view} setView={setView} status={status} identity={identity} onSwitchIdentity={switchIdentity} onOpenAdmin={() => setShowAdmin(true)} />
       {view === "user" ? (
         <UserView
           status={status}
@@ -337,12 +358,13 @@ export default function RakhwaalApp() {
           onClose={() => setShowContactsModal(false)}
         />
       )}
+      {showAdmin && <AdminPanel onClose={() => setShowAdmin(false)} />}
     </div>
   );
 }
 
 // ---------------- Top bar ----------------
-function TopBar({ view, setView, status, identity, onSwitchIdentity }) {
+function TopBar({ view, setView, status, identity, onSwitchIdentity, onOpenAdmin }) {
   return (
     <div style={styles.topbar}>
       <div style={styles.brand}>
@@ -365,6 +387,9 @@ function TopBar({ view, setView, status, identity, onSwitchIdentity }) {
             {status === "active" && <span style={styles.dotAlert} />}
           </button>
         </div>
+        <button style={styles.identityBadge} onClick={onOpenAdmin} title="Admin">
+          <Eye size={13} />
+        </button>
         <button style={styles.identityBadge} onClick={onSwitchIdentity} title="Changer d'identité">
           {identity.initials}
         </button>
@@ -374,8 +399,175 @@ function TopBar({ view, setView, status, identity, onSwitchIdentity }) {
 }
 
 // ---------------- Identity picker (first launch) ----------------
-function IdentityPicker({ contacts, onChoose }) {
-  const [customName, setCustomName] = useState("");
+function IdentityPicker({ onChoose }) {
+  const [profiles, setProfiles] = useState({}); // { id: { name, initials, passwordHash } } — passwordHash present but never shown
+  const [loadingProfiles, setLoadingProfiles] = useState(true);
+  const [mode, setMode] = useState("choose"); // "choose" | "login" | "create"
+  const [selectedId, setSelectedId] = useState(null);
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [newName, setNewName] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = subscribeProfileList((data) => {
+      setProfiles(data);
+      setLoadingProfiles(false);
+    });
+    return unsubscribe;
+  }, []);
+
+  const profileList = Object.entries(profiles).map(([id, p]) => ({ id, ...p }));
+  const selectedProfile = profileList.find((p) => p.id === selectedId);
+
+  const startLogin = (id) => {
+    setSelectedId(id);
+    setPassword("");
+    setError("");
+    setMode("login");
+  };
+
+  const submitLogin = async () => {
+    if (!password) {
+      setError("Entre le mot de passe.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const hash = await hashPassword(password);
+      if (hash === selectedProfile.passwordHash) {
+        onChoose(selectedProfile);
+      } else {
+        setError("Mot de passe incorrect.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitCreate = async () => {
+    const trimmedName = newName.trim();
+    if (!trimmedName) {
+      setError("Entre un nom.");
+      return;
+    }
+    if (password.length < 4) {
+      setError("Le mot de passe doit faire au moins 4 caractères.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError("Les mots de passe ne correspondent pas.");
+      return;
+    }
+    const baseId = slugify(trimmedName) || "user";
+    let candidateId = baseId;
+    let n = 1;
+    while (profiles[candidateId]) {
+      n += 1;
+      candidateId = `${baseId}-${n}`;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const passwordHash = await hashPassword(password);
+      const newProfile = {
+        name: trimmedName,
+        initials: initialsOf(trimmedName),
+        passwordHash,
+        contacts: {},
+      };
+      await createProfile(candidateId, newProfile);
+      onChoose({ id: candidateId, ...newProfile });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (mode === "login" && selectedProfile) {
+    return (
+      <div style={styles.identityWrap}>
+        <div style={styles.avatarLg}>{selectedProfile.initials}</div>
+        <div style={styles.identityTitle}>{selectedProfile.name}</div>
+        <div style={styles.identitySub}>Entre ton mot de passe</div>
+
+        <div style={{ width: "100%" }}>
+          <input
+            type="password"
+            placeholder="Mot de passe"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submitLogin()}
+            style={styles.modalInput}
+            autoFocus
+          />
+        </div>
+        {error && <div style={styles.modalError}>{error}</div>}
+        <button style={styles.identityPrimaryBtn} onClick={submitLogin} disabled={busy}>
+          {busy ? "Connexion…" : "Se connecter"}
+        </button>
+        <button
+          style={styles.identityBackBtn}
+          onClick={() => {
+            setMode("choose");
+            setError("");
+          }}
+        >
+          Retour
+        </button>
+      </div>
+    );
+  }
+
+  if (mode === "create") {
+    return (
+      <div style={styles.identityWrap}>
+        <Shield size={32} color={colors.sand} strokeWidth={1.8} />
+        <div style={styles.identityTitle}>Nouveau profil</div>
+        <div style={styles.identitySub}>Choisis un nom et un mot de passe</div>
+
+        <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 8 }}>
+          <input
+            type="text"
+            placeholder="Ton nom"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            style={styles.modalInput}
+            autoFocus
+          />
+          <input
+            type="password"
+            placeholder="Mot de passe (4 caractères min.)"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            style={styles.modalInput}
+          />
+          <input
+            type="password"
+            placeholder="Confirme le mot de passe"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submitCreate()}
+            style={styles.modalInput}
+          />
+        </div>
+        {error && <div style={styles.modalError}>{error}</div>}
+        <button style={styles.identityPrimaryBtn} onClick={submitCreate} disabled={busy}>
+          {busy ? "Création…" : "Créer mon profil"}
+        </button>
+        <button
+          style={styles.identityBackBtn}
+          onClick={() => {
+            setMode("choose");
+            setError("");
+          }}
+        >
+          Retour
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div style={styles.identityWrap}>
@@ -384,43 +576,214 @@ function IdentityPicker({ contacts, onChoose }) {
       <div style={styles.identitySub}>Qui utilise cet appareil ?</div>
 
       <div style={styles.identityList}>
-        {IDENTITY_PRESETS.map((p) => (
-          <button key={p.id} style={styles.identityOption} onClick={() => onChoose(p)}>
-            <div style={styles.avatarSm}>{p.initials}</div>
-            <span>{p.name}</span>
-            <ChevronRight size={16} color={colors.muted} style={{ marginLeft: "auto" }} />
-          </button>
-        ))}
+        {loadingProfiles ? (
+          <div style={styles.identityHint}>Chargement des profils…</div>
+        ) : profileList.length === 0 ? (
+          <div style={styles.identityHint}>Aucun profil pour l'instant — crée le premier.</div>
+        ) : (
+          profileList.map((p) => (
+            <button key={p.id} style={styles.identityOption} onClick={() => startLogin(p.id)}>
+              <div style={styles.avatarSm}>{p.initials}</div>
+              <span>{p.name}</span>
+              <ChevronRight size={16} color={colors.muted} style={{ marginLeft: "auto" }} />
+            </button>
+          ))
+        )}
       </div>
 
-      <div style={styles.identityCustomRow}>
-        <input
-          type="text"
-          placeholder="Autre nom…"
-          value={customName}
-          onChange={(e) => setCustomName(e.target.value)}
-          style={styles.modalInput}
-        />
-        <button
-          style={styles.identityCustomBtn}
-          onClick={() => {
-            const trimmed = customName.trim();
-            if (!trimmed) return;
-            onChoose({ id: trimmed.toLowerCase().replace(/\s+/g, "-") + "-" + uid().slice(0, 4), name: trimmed, initials: initialsOf(trimmed) });
-          }}
-        >
-          OK
-        </button>
-      </div>
+      <button
+        style={styles.identityCustomBtn}
+        onClick={() => {
+          setNewName("");
+          setPassword("");
+          setConfirmPassword("");
+          setError("");
+          setMode("create");
+        }}
+      >
+        <UserPlus size={15} /> Créer un profil
+      </button>
 
       <p style={styles.identityHint}>
-        Pas de mot de passe pour l'instant — juste pour savoir qui déclenche une alerte pendant les tests.
+        Chaque profil a son propre mot de passe et ses propres contacts d'urgence — les autres profils ne les voient pas.
       </p>
     </div>
   );
 }
 
-// ---------------- User view ----------------
+// ---------------- Admin panel ----------------
+function AdminPanel({ onClose }) {
+  const [gate, setGate] = useState("checking"); // "checking" | "setup" | "locked" | "unlocked"
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [profiles, setProfiles] = useState({});
+  const [allUsers, setAllUsers] = useState({});
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    getAdminPasswordHash().then((hash) => {
+      setGate(hash ? "locked" : "setup");
+    });
+  }, []);
+
+  useEffect(() => {
+    if (gate !== "unlocked") return;
+    const unsubProfiles = subscribeProfileList(setProfiles);
+    const unsubUsers = subscribeAllUsers(setAllUsers);
+    return () => {
+      unsubProfiles();
+      unsubUsers();
+    };
+  }, [gate]);
+
+  const submitSetup = async () => {
+    if (password.length < 4) {
+      setError("Le mot de passe doit faire au moins 4 caractères.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError("Les mots de passe ne correspondent pas.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const hash = await hashPassword(password);
+      await setAdminPasswordHash(hash);
+      setGate("unlocked");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitUnlock = async () => {
+    if (!password) {
+      setError("Entre le mot de passe admin.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const hash = await hashPassword(password);
+      const storedHash = await getAdminPasswordHash();
+      if (hash === storedHash) {
+        setGate("unlocked");
+      } else {
+        setError("Mot de passe admin incorrect.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const profileList = Object.entries(profiles).map(([id, p]) => ({
+    id,
+    name: p.name,
+    initials: p.initials,
+    contactCount: p.contacts ? Object.keys(p.contacts).length : 0,
+  }));
+
+  const liveById = allUsers || {};
+
+  return (
+    <div style={styles.modalOverlay} onClick={onClose}>
+      <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalHeader}>
+          <span style={styles.modalTitle}>Admin</span>
+          <button style={styles.modalClose} onClick={onClose} aria-label="Fermer">
+            <X size={18} />
+          </button>
+        </div>
+
+        {gate === "checking" && <div style={styles.identityHint}>Chargement…</div>}
+
+        {gate === "setup" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={styles.modalEmpty}>
+              Aucun mot de passe admin encore défini — choisis-en un maintenant. Il protège cette vue pour toi seul.
+            </div>
+            <input
+              type="password"
+              placeholder="Nouveau mot de passe admin"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              style={styles.modalInput}
+            />
+            <input
+              type="password"
+              placeholder="Confirme le mot de passe"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submitSetup()}
+              style={styles.modalInput}
+            />
+            {error && <div style={styles.modalError}>{error}</div>}
+            <button style={styles.modalAddBtn} onClick={submitSetup} disabled={busy}>
+              {busy ? "Enregistrement…" : "Définir le mot de passe"}
+            </button>
+          </div>
+        )}
+
+        {gate === "locked" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <input
+              type="password"
+              placeholder="Mot de passe admin"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submitUnlock()}
+              style={styles.modalInput}
+              autoFocus
+            />
+            {error && <div style={styles.modalError}>{error}</div>}
+            <button style={styles.modalAddBtn} onClick={submitUnlock} disabled={busy}>
+              {busy ? "Vérification…" : "Déverrouiller"}
+            </button>
+          </div>
+        )}
+
+        {gate === "unlocked" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={styles.modalEmpty}>
+              {profileList.length} profil{profileList.length > 1 ? "s" : ""} créé{profileList.length > 1 ? "s" : ""} au total. Les numéros de contact restent privés à chaque profil.
+            </div>
+            <div style={styles.modalList}>
+              {profileList.length === 0 && <div style={styles.modalEmpty}>Aucun profil pour l'instant.</div>}
+              {profileList.map((p) => {
+                const live = liveById[p.id];
+                const isActive = live && live.status === "active";
+                return (
+                  <div key={p.id} style={styles.modalRow}>
+                    <div style={styles.avatarSm}>{p.initials}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={styles.notifiedName}>{p.name}</div>
+                      <div style={styles.notifiedStatus}>
+                        {p.contactCount} contact{p.contactCount !== 1 ? "s" : ""} enregistré{p.contactCount !== 1 ? "s" : ""}
+                        {live ? ` · vu ${fmtTime(live.updatedAt || now)}` : " · jamais connecté"}
+                      </div>
+                    </div>
+                    <span style={isActive ? styles.adminAlertTag : styles.safeTag}>
+                      {isActive ? "Alerte" : "Sûr"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 function UserView({ status, holdProgress, onStart, onCancel, onResolve, position, alertStart, now, locError, contacts, identity, onManageContacts }) {
   return (
     <div style={styles.userWrap}>
@@ -978,15 +1341,60 @@ const styles = {
   },
   identityCustomRow: { display: "flex", gap: 8, width: "100%", marginTop: 20 },
   identityCustomBtn: {
-    background: colors.safe,
-    color: "#0E1913",
-    border: "none",
-    borderRadius: 9,
-    padding: "0 18px",
-    fontWeight: 700,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+    width: "100%",
+    background: "transparent",
+    border: `1px dashed ${colors.mutedDeep}`,
+    color: colors.muted,
+    borderRadius: 10,
+    padding: "12px",
+    fontWeight: 600,
     fontSize: 13,
     cursor: "pointer",
     fontFamily: "'Inter', sans-serif",
+    marginTop: 12,
+  },
+  identityPrimaryBtn: {
+    width: "100%",
+    background: colors.safe,
+    color: "#0E1913",
+    border: "none",
+    borderRadius: 10,
+    padding: "12px",
+    fontWeight: 700,
+    fontSize: 13.5,
+    cursor: "pointer",
+    fontFamily: "'Inter', sans-serif",
+    marginTop: 16,
+  },
+  identityBackBtn: {
+    width: "100%",
+    background: "transparent",
+    border: "none",
+    color: colors.muted,
+    fontSize: 12.5,
+    fontWeight: 600,
+    cursor: "pointer",
+    fontFamily: "'Inter', sans-serif",
+    marginTop: 10,
+    padding: "6px",
+  },
+  avatarLg: {
+    width: 56,
+    height: 56,
+    borderRadius: "50%",
+    background: colors.bgElevated,
+    border: `1px solid ${colors.border}`,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 18,
+    fontWeight: 700,
+    color: colors.sand,
+    marginBottom: 6,
   },
   identityHint: {
     color: colors.mutedDeep,
@@ -1408,6 +1816,14 @@ const styles = {
     fontWeight: 700,
     color: colors.safe,
     background: "rgba(63,167,150,0.12)",
+    padding: "3px 8px",
+    borderRadius: 999,
+  },
+  adminAlertTag: {
+    fontSize: 10.5,
+    fontWeight: 700,
+    color: colors.alert,
+    background: colors.alertDim,
     padding: "3px 8px",
     borderRadius: 999,
   },
