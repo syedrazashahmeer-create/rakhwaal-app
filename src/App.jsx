@@ -54,6 +54,16 @@ const initialsOf = (name) =>
 
 const digitsOnly = (phone) => (phone || "").replace(/[^\d]/g, "");
 
+// Builds a WhatsApp deep link whose message points to the app's own
+// "Famille" live-tracking view, so it can be sent immediately at SOS time
+// without waiting for a GPS fix (the link itself updates live afterwards).
+const buildWaUrl = (contact, senderName) => {
+  if (!contact.phone) return null;
+  const appUrl = typeof window !== "undefined" ? window.location.origin : "";
+  const text = `🚨 Alerte SOS Rakhwaal — ${senderName || "Un proche"} a besoin d'aide. Suivez sa position en direct ici : ${appUrl}`;
+  return `https://wa.me/${contact.phone}?text=${encodeURIComponent(text)}`;
+};
+
 // ---------- Identity (no login — a locally-remembered "who is using this device") ----------
 const IDENTITY_KEY = "rakhwaal_identity_v1";
 
@@ -232,8 +242,24 @@ export default function RakhwaalApp() {
       setHoldProgress(100);
       clearInterval(holdInterval.current);
       if (navigator.vibrate) navigator.vibrate([80, 40, 80, 40, 200]);
+
+      // Auto-open a WhatsApp draft per contact with a saved number.
+      // Browsers may block more than one automatic popup — any that get
+      // blocked still have a manual "Envoyer" button in the alert panel.
+      contacts
+        .filter((c) => c.phone)
+        .forEach((c, i) => {
+          const url = buildWaUrl(c, identity?.name);
+          if (!url) return;
+          setTimeout(() => {
+            const win = window.open(url, "_blank");
+            if (!win) {
+              console.warn(`Popup bloqué pour ${c.name} — utiliser le bouton manuel.`);
+            }
+          }, i * 250);
+        });
     }, HOLD_MS);
-  }, [status]);
+  }, [status, contacts, identity]);
 
   const cancelHold = useCallback(() => {
     if (status === "arming") {
@@ -292,6 +318,7 @@ export default function RakhwaalApp() {
           now={now}
           locError={locError}
           contacts={contacts}
+          identity={identity}
           onManageContacts={() => setShowContactsModal(true)}
         />
       ) : (
@@ -394,7 +421,7 @@ function IdentityPicker({ contacts, onChoose }) {
 }
 
 // ---------------- User view ----------------
-function UserView({ status, holdProgress, onStart, onCancel, onResolve, position, alertStart, now, locError, contacts, onManageContacts }) {
+function UserView({ status, holdProgress, onStart, onCancel, onResolve, position, alertStart, now, locError, contacts, identity, onManageContacts }) {
   return (
     <div style={styles.userWrap}>
       {status !== "active" ? (
@@ -489,13 +516,14 @@ function UserView({ status, holdProgress, onStart, onCancel, onResolve, position
           locError={locError}
           onResolve={onResolve}
           contacts={contacts}
+          identity={identity}
         />
       )}
     </div>
   );
 }
 
-function ActiveAlertPanel({ position, alertStart, now, locError, onResolve, contacts }) {
+function ActiveAlertPanel({ position, alertStart, now, locError, onResolve, contacts, identity }) {
   return (
     <div style={styles.activePanel}>
       <div style={styles.activeHeader}>
@@ -534,22 +562,14 @@ function ActiveAlertPanel({ position, alertStart, now, locError, onResolve, cont
 
       <div style={styles.notifiedList}>
         {contacts.map((c) => {
-          const mapsUrl = position
-            ? `https://www.google.com/maps?q=${position.lat},${position.lng}`
-            : null;
-          const waText = mapsUrl
-            ? `🚨 Alerte SOS Rakhwaal — j'ai besoin d'aide. Ma position en direct : ${mapsUrl}`
-            : `🚨 Alerte SOS Rakhwaal — j'ai besoin d'aide. Recherche de position GPS en cours…`;
-          const waUrl = c.phone
-            ? `https://wa.me/${c.phone}?text=${encodeURIComponent(waText)}`
-            : null;
+          const waUrl = buildWaUrl(c, identity?.name);
           return (
             <div key={c.id} style={styles.notifiedRow}>
               <div style={styles.avatarSm}>{c.initials}</div>
               <div style={{ flex: 1 }}>
                 <div style={styles.notifiedName}>{c.name}</div>
                 <div style={styles.notifiedStatus}>
-                  {c.phone ? "Notifié · suit votre position" : "Pas de numéro — ajoute-le dans Gérer"}
+                  {c.phone ? "Message WhatsApp ouvert · appuie sur Envoyer" : "Pas de numéro — ajoute-le dans Gérer"}
                 </div>
               </div>
               {waUrl ? (
