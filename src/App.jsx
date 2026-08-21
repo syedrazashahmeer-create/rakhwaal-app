@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Shield, MapPin, Users, Phone, X, Check, AlertTriangle, Radio, ChevronRight, UserPlus, Clock } from "lucide-react";
+import { pushLiveAlert, clearLiveAlert, subscribeLiveAlert } from "./firebase";
 
 // ---------- Helpers ----------
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -64,6 +65,14 @@ export default function RakhwaalApp() {
   const [locError, setLocError] = useState(null);
   const [now, setNow] = useState(Date.now());
   const [showContactsModal, setShowContactsModal] = useState(false);
+  const [liveAlert, setLiveAlert] = useState(null); // data read from Firebase — drives Family view
+
+  // Subscribe once to the shared Firebase channel so the "Famille" view
+  // reflects whatever any device on this link has pushed.
+  useEffect(() => {
+    const unsubscribe = subscribeLiveAlert(setLiveAlert);
+    return unsubscribe;
+  }, []);
 
   useEffect(() => {
     saveContacts(contacts);
@@ -111,7 +120,17 @@ export default function RakhwaalApp() {
           ts: Date.now(),
         };
         setPosition(point);
-        setPathTrail((prev) => [...prev.slice(-49), point]);
+        setPathTrail((prev) => {
+          const nextTrail = [...prev.slice(-49), point];
+          pushLiveAlert({
+            status: "active",
+            position: point,
+            trail: nextTrail,
+            alertStart: alertStart || Date.now(),
+            updatedAt: Date.now(),
+          });
+          return nextTrail;
+        });
         setLocError(null);
       },
       (err) => {
@@ -138,8 +157,18 @@ export default function RakhwaalApp() {
       demo: true,
     };
     setPosition(point);
-    setPathTrail((prev) => [...prev.slice(-49), point]);
-  }, []);
+    setPathTrail((prev) => {
+      const nextTrail = [...prev.slice(-49), point];
+      pushLiveAlert({
+        status: "active",
+        position: point,
+        trail: nextTrail,
+        alertStart: alertStart || Date.now(),
+        updatedAt: Date.now(),
+      });
+      return nextTrail;
+    });
+  }, [alertStart]);
 
   useEffect(() => {
     if (status !== "active" || !locError) return;
@@ -182,6 +211,7 @@ export default function RakhwaalApp() {
     setPathTrail([]);
     setPosition(null);
     setHoldProgress(0);
+    clearLiveAlert();
   };
 
   return (
@@ -204,11 +234,7 @@ export default function RakhwaalApp() {
         />
       ) : (
         <FamilyView
-          status={status}
-          position={position}
-          pathTrail={pathTrail}
-          alertStart={alertStart}
-          now={now}
+          liveAlert={liveAlert}
           contacts={contacts}
         />
       )}
@@ -431,20 +457,31 @@ function ActiveAlertPanel({ position, alertStart, now, locError, onResolve, cont
 }
 
 // ---------------- Family view ----------------
-function FamilyView({ status, position, pathTrail, alertStart, now, contacts }) {
+function FamilyView({ liveAlert, contacts }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const isActive = liveAlert && liveAlert.status === "active";
+  const position = liveAlert?.position || null;
+  const trail = liveAlert?.trail || [];
+  const alertStart = liveAlert?.alertStart || now;
+
   return (
     <div style={styles.familyWrap}>
-      {status === "active" ? (
+      {isActive ? (
         <>
           <div style={styles.familyAlertBanner}>
             <div style={styles.pulseDot} />
             <div>
-              <div style={styles.activeTitle}>Fizza a déclenché une alerte SOS</div>
-              <div style={styles.activeSub}>Il y a {fmtElapsed(alertStart || now)}</div>
+              <div style={styles.activeTitle}>Alerte SOS déclenchée</div>
+              <div style={styles.activeSub}>Il y a {fmtElapsed(alertStart)}</div>
             </div>
           </div>
 
-          <LiveMapCanvas position={position} trail={pathTrail} />
+          <LiveMapCanvas position={position} trail={trail} />
 
           <div style={styles.actionRow}>
             <a href="tel:15" style={styles.callBtn}>
@@ -464,7 +501,7 @@ function FamilyView({ status, position, pathTrail, alertStart, now, contacts }) 
 
           <div style={styles.trailInfo}>
             <Radio size={14} color={colors.safe} />
-            <span>{pathTrail.length} points GPS reçus en direct</span>
+            <span>{trail.length} points GPS reçus en direct</span>
           </div>
         </>
       ) : (
