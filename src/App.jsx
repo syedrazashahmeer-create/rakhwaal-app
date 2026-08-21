@@ -7,7 +7,7 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 
 const fmtTime = (ts) => {
   const d = new Date(ts);
-  return d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 };
 
 const fmtElapsed = (ts) => {
@@ -33,7 +33,7 @@ const digitsOnly = (phone) => (phone || "").replace(/[^\d]/g, "");
 const buildWaUrl = (contact, senderName) => {
   if (!contact.phone) return null;
   const appUrl = typeof window !== "undefined" ? window.location.origin : "";
-  const text = `🚨 Alerte SOS Rakhwaal — ${senderName || "Un proche"} a besoin d'aide. Suivez sa position en direct ici : ${appUrl}`;
+  const text = `🚨 Rakhwaal SOS Alert — ${senderName || "A loved one"} needs help. Follow their live location here: ${appUrl}`;
   return `https://wa.me/${contact.phone}?text=${encodeURIComponent(text)}`;
 };
 
@@ -147,7 +147,7 @@ export default function RakhwaalApp() {
   const addContact = (name, phone) => {
     persistContacts([
       ...contacts,
-      { id: uid(), name, phone: digitsOnly(phone), role: "Contact d'urgence", initials: initialsOf(name) },
+      { id: uid(), name, phone: digitsOnly(phone), role: "Emergency contact", initials: initialsOf(name) },
     ]);
   };
 
@@ -274,7 +274,7 @@ export default function RakhwaalApp() {
           setTimeout(() => {
             const win = window.open(url, "_blank");
             if (!win) {
-              console.warn(`Popup bloqué pour ${c.name} — utiliser le bouton manuel.`);
+              console.warn(`Popup blocked for ${c.name} — use the manual button.`);
             }
           }, i * 250);
         });
@@ -377,20 +377,20 @@ function TopBar({ view, setView, status, identity, onSwitchIdentity, onOpenAdmin
             onClick={() => setView("user")}
             style={{ ...styles.tabBtn, ...(view === "user" ? styles.tabBtnActive : {}) }}
           >
-            Moi
+            Me
           </button>
           <button
             onClick={() => setView("family")}
             style={{ ...styles.tabBtn, ...(view === "family" ? styles.tabBtnActive : {}) }}
           >
-            Famille
+            Family
             {status === "active" && <span style={styles.dotAlert} />}
           </button>
         </div>
         <button style={styles.identityBadge} onClick={onOpenAdmin} title="Admin">
           <Eye size={13} />
         </button>
-        <button style={styles.identityBadge} onClick={onSwitchIdentity} title="Changer d'identité">
+        <button style={styles.identityBadge} onClick={onSwitchIdentity} title="Switch profile">
           {identity.initials}
         </button>
       </div>
@@ -430,7 +430,7 @@ function IdentityPicker({ onChoose }) {
 
   const submitLogin = async () => {
     if (!password) {
-      setError("Entre le mot de passe.");
+      setError("Enter your password.");
       return;
     }
     setBusy(true);
@@ -440,7 +440,7 @@ function IdentityPicker({ onChoose }) {
       if (hash === selectedProfile.passwordHash) {
         onChoose(selectedProfile);
       } else {
-        setError("Mot de passe incorrect.");
+        setError("Incorrect password.");
       }
     } finally {
       setBusy(false);
@@ -450,15 +450,15 @@ function IdentityPicker({ onChoose }) {
   const submitCreate = async () => {
     const trimmedName = newName.trim();
     if (!trimmedName) {
-      setError("Entre un nom.");
+      setError("Enter a name.");
       return;
     }
     if (password.length < 4) {
-      setError("Le mot de passe doit faire au moins 4 caractères.");
+      setError("Password must be at least 4 characters.");
       return;
     }
     if (password !== confirmPassword) {
-      setError("Les mots de passe ne correspondent pas.");
+      setError("Passwords don't match.");
       return;
     }
     const baseId = slugify(trimmedName) || "user";
@@ -490,12 +490,12 @@ function IdentityPicker({ onChoose }) {
       <div style={styles.identityWrap}>
         <div style={styles.avatarLg}>{selectedProfile.initials}</div>
         <div style={styles.identityTitle}>{selectedProfile.name}</div>
-        <div style={styles.identitySub}>Entre ton mot de passe</div>
+        <div style={styles.identitySub}>Enter your password</div>
 
         <div style={{ width: "100%" }}>
           <input
             type="password"
-            placeholder="Mot de passe"
+            placeholder="Password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submitLogin()}
@@ -505,7 +505,7 @@ function IdentityPicker({ onChoose }) {
         </div>
         {error && <div style={styles.modalError}>{error}</div>}
         <button style={styles.identityPrimaryBtn} onClick={submitLogin} disabled={busy}>
-          {busy ? "Connexion…" : "Se connecter"}
+          {busy ? "Signing in…" : "Sign in"}
         </button>
         <button
           style={styles.identityBackBtn}
@@ -514,7 +514,7 @@ function IdentityPicker({ onChoose }) {
             setError("");
           }}
         >
-          Retour
+          Back
         </button>
       </div>
     );
@@ -524,13 +524,13 @@ function IdentityPicker({ onChoose }) {
     return (
       <div style={styles.identityWrap}>
         <Shield size={32} color={colors.sand} strokeWidth={1.8} />
-        <div style={styles.identityTitle}>Nouveau profil</div>
-        <div style={styles.identitySub}>Choisis un nom et un mot de passe</div>
+        <div style={styles.identityTitle}>New profile</div>
+        <div style={styles.identitySub}>Choose a name and a password</div>
 
         <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 8 }}>
           <input
             type="text"
-            placeholder="Ton nom"
+            placeholder="Your name"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             style={styles.modalInput}
@@ -538,14 +538,14 @@ function IdentityPicker({ onChoose }) {
           />
           <input
             type="password"
-            placeholder="Mot de passe (4 caractères min.)"
+            placeholder="Password (4 characters min.)"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             style={styles.modalInput}
           />
           <input
             type="password"
-            placeholder="Confirme le mot de passe"
+            placeholder="Confirm password"
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submitCreate()}
@@ -554,7 +554,7 @@ function IdentityPicker({ onChoose }) {
         </div>
         {error && <div style={styles.modalError}>{error}</div>}
         <button style={styles.identityPrimaryBtn} onClick={submitCreate} disabled={busy}>
-          {busy ? "Création…" : "Créer mon profil"}
+          {busy ? "Creating…" : "Create my profile"}
         </button>
         <button
           style={styles.identityBackBtn}
@@ -563,7 +563,7 @@ function IdentityPicker({ onChoose }) {
             setError("");
           }}
         >
-          Retour
+          Back
         </button>
       </div>
     );
@@ -573,13 +573,13 @@ function IdentityPicker({ onChoose }) {
     <div style={styles.identityWrap}>
       <Shield size={36} color={colors.sand} strokeWidth={1.8} />
       <div style={styles.identityTitle}>Rakhwaal</div>
-      <div style={styles.identitySub}>Qui utilise cet appareil ?</div>
+      <div style={styles.identitySub}>Who's using this device?</div>
 
       <div style={styles.identityList}>
         {loadingProfiles ? (
-          <div style={styles.identityHint}>Chargement des profils…</div>
+          <div style={styles.identityHint}>Loading profiles…</div>
         ) : profileList.length === 0 ? (
-          <div style={styles.identityHint}>Aucun profil pour l'instant — crée le premier.</div>
+          <div style={styles.identityHint}>No profiles yet — create the first one.</div>
         ) : (
           profileList.map((p) => (
             <button key={p.id} style={styles.identityOption} onClick={() => startLogin(p.id)}>
@@ -601,11 +601,11 @@ function IdentityPicker({ onChoose }) {
           setMode("create");
         }}
       >
-        <UserPlus size={15} /> Créer un profil
+        <UserPlus size={15} /> Create a profile
       </button>
 
       <p style={styles.identityHint}>
-        Chaque profil a son propre mot de passe et ses propres contacts d'urgence — les autres profils ne les voient pas.
+        Each profile has its own password and its own emergency contacts — other profiles can't see them.
       </p>
     </div>
   );
@@ -645,11 +645,11 @@ function AdminPanel({ onClose }) {
 
   const submitSetup = async () => {
     if (password.length < 4) {
-      setError("Le mot de passe doit faire au moins 4 caractères.");
+      setError("Password must be at least 4 characters.");
       return;
     }
     if (password !== confirmPassword) {
-      setError("Les mots de passe ne correspondent pas.");
+      setError("Passwords don't match.");
       return;
     }
     setBusy(true);
@@ -665,7 +665,7 @@ function AdminPanel({ onClose }) {
 
   const submitUnlock = async () => {
     if (!password) {
-      setError("Entre le mot de passe admin.");
+      setError("Enter the admin password.");
       return;
     }
     setBusy(true);
@@ -676,7 +676,7 @@ function AdminPanel({ onClose }) {
       if (hash === storedHash) {
         setGate("unlocked");
       } else {
-        setError("Mot de passe admin incorrect.");
+        setError("Incorrect admin password.");
       }
     } finally {
       setBusy(false);
@@ -697,28 +697,28 @@ function AdminPanel({ onClose }) {
       <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <span style={styles.modalTitle}>Admin</span>
-          <button style={styles.modalClose} onClick={onClose} aria-label="Fermer">
+          <button style={styles.modalClose} onClick={onClose} aria-label="Close">
             <X size={18} />
           </button>
         </div>
 
-        {gate === "checking" && <div style={styles.identityHint}>Chargement…</div>}
+        {gate === "checking" && <div style={styles.identityHint}>Loading…</div>}
 
         {gate === "setup" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <div style={styles.modalEmpty}>
-              Aucun mot de passe admin encore défini — choisis-en un maintenant. Il protège cette vue pour toi seul.
+              No admin password set yet — choose one now. It protects this view for you only.
             </div>
             <input
               type="password"
-              placeholder="Nouveau mot de passe admin"
+              placeholder="New admin password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               style={styles.modalInput}
             />
             <input
               type="password"
-              placeholder="Confirme le mot de passe"
+              placeholder="Confirm password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && submitSetup()}
@@ -726,7 +726,7 @@ function AdminPanel({ onClose }) {
             />
             {error && <div style={styles.modalError}>{error}</div>}
             <button style={styles.modalAddBtn} onClick={submitSetup} disabled={busy}>
-              {busy ? "Enregistrement…" : "Définir le mot de passe"}
+              {busy ? "Saving…" : "Set password"}
             </button>
           </div>
         )}
@@ -735,7 +735,7 @@ function AdminPanel({ onClose }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <input
               type="password"
-              placeholder="Mot de passe admin"
+              placeholder="Admin password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && submitUnlock()}
@@ -744,7 +744,7 @@ function AdminPanel({ onClose }) {
             />
             {error && <div style={styles.modalError}>{error}</div>}
             <button style={styles.modalAddBtn} onClick={submitUnlock} disabled={busy}>
-              {busy ? "Vérification…" : "Déverrouiller"}
+              {busy ? "Checking…" : "Unlock"}
             </button>
           </div>
         )}
@@ -752,10 +752,10 @@ function AdminPanel({ onClose }) {
         {gate === "unlocked" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={styles.modalEmpty}>
-              {profileList.length} profil{profileList.length > 1 ? "s" : ""} créé{profileList.length > 1 ? "s" : ""} au total. Les numéros de contact restent privés à chaque profil.
+              {profileList.length} profile{profileList.length !== 1 ? "s" : ""} created in total. Contact numbers stay private to each profile.
             </div>
             <div style={styles.modalList}>
-              {profileList.length === 0 && <div style={styles.modalEmpty}>Aucun profil pour l'instant.</div>}
+              {profileList.length === 0 && <div style={styles.modalEmpty}>No profiles yet.</div>}
               {profileList.map((p) => {
                 const live = liveById[p.id];
                 const isActive = live && live.status === "active";
@@ -765,12 +765,12 @@ function AdminPanel({ onClose }) {
                     <div style={{ flex: 1 }}>
                       <div style={styles.notifiedName}>{p.name}</div>
                       <div style={styles.notifiedStatus}>
-                        {p.contactCount} contact{p.contactCount !== 1 ? "s" : ""} enregistré{p.contactCount !== 1 ? "s" : ""}
-                        {live ? ` · vu ${fmtTime(live.updatedAt || now)}` : " · jamais connecté"}
+                        {p.contactCount} contact{p.contactCount !== 1 ? "s" : ""} saved
+                        {live ? ` · last seen ${fmtTime(live.updatedAt || now)}` : " · never logged in"}
                       </div>
                     </div>
                     <span style={isActive ? styles.adminAlertTag : styles.safeTag}>
-                      {isActive ? "Alerte" : "Sûr"}
+                      {isActive ? "Alert" : "Safe"}
                     </span>
                   </div>
                 );
@@ -792,11 +792,11 @@ function UserView({ status, holdProgress, onStart, onCancel, onResolve, position
           <div style={styles.statusPill(status)}>
             {status === "safe" ? (
               <>
-                <Check size={14} /> Vous êtes en sécurité
+                <Check size={14} /> You're safe
               </>
             ) : (
               <>
-                <Clock size={14} /> Maintenez pour confirmer…
+                <Clock size={14} /> Hold to confirm…
               </>
             )}
           </div>
@@ -815,7 +815,7 @@ function UserView({ status, holdProgress, onStart, onCancel, onResolve, position
                 ...styles.sosButton,
                 ...(status === "arming" ? styles.sosButtonArming : {}),
               }}
-              aria-label="Maintenir pour déclencher l'alerte SOS"
+              aria-label="Hold to trigger the SOS alert"
             >
               <svg width="220" height="220" style={{ position: "absolute", inset: 0 }}>
                 <circle
@@ -848,15 +848,15 @@ function UserView({ status, holdProgress, onStart, onCancel, onResolve, position
           </div>
 
           <p style={styles.hint}>
-            Appui court = armé · Maintien {`~2s`} = alerte envoyée à vos proches
+            Short tap = armed · Hold {`~2s`} = alert sent to your contacts
           </p>
 
           <div style={styles.contactsPreview}>
             <div style={styles.contactsPreviewHeader}>
               <Users size={14} color={colors.muted} />
-              <span>Vos contacts d'urgence</span>
+              <span>Your emergency contacts</span>
               <button style={styles.manageLink} onClick={onManageContacts}>
-                Gérer
+                Manage
               </button>
             </div>
             <div style={styles.avatarRow}>
@@ -865,7 +865,7 @@ function UserView({ status, holdProgress, onStart, onCancel, onResolve, position
                   {c.initials}
                 </div>
               ))}
-              <button style={styles.avatarAdd} onClick={onManageContacts} aria-label="Ajouter un contact">
+              <button style={styles.avatarAdd} onClick={onManageContacts} aria-label="Add a contact">
                 <UserPlus size={14} />
               </button>
             </div>
@@ -892,8 +892,8 @@ function ActiveAlertPanel({ position, alertStart, now, locError, onResolve, cont
       <div style={styles.activeHeader}>
         <div style={styles.pulseDot} />
         <div>
-          <div style={styles.activeTitle}>Alerte active</div>
-          <div style={styles.activeSub}>Envoyée à {contacts.length} contacts · {fmtElapsed(alertStart || now)}</div>
+          <div style={styles.activeTitle}>Alert active</div>
+          <div style={styles.activeSub}>Sent to {contacts.length} contacts · {fmtElapsed(alertStart || now)}</div>
         </div>
       </div>
 
@@ -906,20 +906,20 @@ function ActiveAlertPanel({ position, alertStart, now, locError, onResolve, cont
             </div>
             <div style={styles.coordsSub}>
               {position.demo
-                ? "position de démo · GPS réel bloqué dans cet aperçu"
-                : `précision ±${Math.round(position.accuracy)}m · mis à jour ${fmtTime(position.ts)}`}
+                ? "demo location · real GPS blocked in this preview"
+                : `accuracy ±${Math.round(position.accuracy)}m · updated ${fmtTime(position.ts)}`}
             </div>
           </>
         ) : locError === "denied" ? (
           <div style={styles.coordsSub}>
-            Permission refusée — autorise la localisation dans les réglages du navigateur, puis relance l'alerte.
+            Permission denied — allow location in your browser settings, then restart the alert.
           </div>
         ) : locError === "blocked" ? (
           <div style={styles.coordsSub}>
-            GPS indisponible dans cet aperçu (sandbox) — position de démo utilisée à la place.
+            GPS unavailable in this preview (sandbox) — using a demo location instead.
           </div>
         ) : (
-          <div style={styles.coordsSub}>Recherche du signal GPS…</div>
+          <div style={styles.coordsSub}>Searching for GPS signal…</div>
         )}
       </div>
 
@@ -932,11 +932,11 @@ function ActiveAlertPanel({ position, alertStart, now, locError, onResolve, cont
               <div style={{ flex: 1 }}>
                 <div style={styles.notifiedName}>{c.name}</div>
                 <div style={styles.notifiedStatus}>
-                  {c.phone ? "Message WhatsApp ouvert · appuie sur Envoyer" : "Pas de numéro — ajoute-le dans Gérer"}
+                  {c.phone ? "WhatsApp message opened · tap Send" : "No number — add one in Manage"}
                 </div>
               </div>
               {waUrl ? (
-                <a href={waUrl} target="_blank" rel="noreferrer" style={styles.waBtn} aria-label={`Envoyer sur WhatsApp à ${c.name}`}>
+                <a href={waUrl} target="_blank" rel="noreferrer" style={styles.waBtn} aria-label={`Send WhatsApp to ${c.name}`}>
                   <Phone size={14} />
                 </a>
               ) : (
@@ -948,7 +948,7 @@ function ActiveAlertPanel({ position, alertStart, now, locError, onResolve, cont
       </div>
 
       <button style={styles.resolveBtn} onClick={onResolve}>
-        <Check size={16} /> Je suis en sécurité — annuler l'alerte
+        <Check size={16} /> I'm safe — cancel the alert
       </button>
     </div>
   );
@@ -995,7 +995,7 @@ function FamilyView({ allUsers, currentUserId, contacts }) {
                     ...(u.id === selected?.id ? styles.multiAlertTabActive : {}),
                   }}
                 >
-                  {u.name || "Inconnu"}
+                  {u.name || "Unknown"}
                 </button>
               ))}
             </div>
@@ -1005,9 +1005,9 @@ function FamilyView({ allUsers, currentUserId, contacts }) {
             <div style={styles.pulseDot} />
             <div>
               <div style={styles.activeTitle}>
-                {selected.name || "Quelqu'un"} a déclenché une alerte SOS
+                {selected.name || "Someone"} triggered an SOS alert
               </div>
-              <div style={styles.activeSub}>Il y a {fmtElapsed(selected.alertStart || now)}</div>
+              <div style={styles.activeSub}>{fmtElapsed(selected.alertStart || now)} ago</div>
             </div>
           </div>
 
@@ -1015,7 +1015,7 @@ function FamilyView({ allUsers, currentUserId, contacts }) {
 
           <div style={styles.actionRow}>
             <a href="tel:15" style={styles.callBtn}>
-              <Phone size={16} /> Appeler
+              <Phone size={16} /> Call
             </a>
             {selected.position && (
               <a
@@ -1024,22 +1024,22 @@ function FamilyView({ allUsers, currentUserId, contacts }) {
                 rel="noreferrer"
                 style={styles.mapsBtn}
               >
-                <MapPin size={16} /> Ouvrir dans Maps
+                <MapPin size={16} /> Open in Maps
               </a>
             )}
           </div>
 
           <div style={styles.trailInfo}>
             <Radio size={14} color={colors.safe} />
-            <span>{(selected.trail || []).length} points GPS reçus en direct</span>
+            <span>{(selected.trail || []).length} GPS points received live</span>
           </div>
         </>
       ) : (
         <div style={styles.emptyState}>
           <Shield size={40} color={colors.mutedDeep} strokeWidth={1.5} />
-          <div style={styles.emptyTitle}>Aucune alerte active</div>
+          <div style={styles.emptyTitle}>No active alert</div>
           <div style={styles.emptySub}>
-            Vous serez notifié instantanément si un membre de votre famille déclenche le SOS.
+            You'll be notified instantly if a family member triggers an SOS.
           </div>
           <div style={styles.watchList}>
             {safeUsers.length > 0
@@ -1049,10 +1049,10 @@ function FamilyView({ allUsers, currentUserId, contacts }) {
                     <div key={u.id} style={styles.watchRow}>
                       <div style={styles.avatarSm}>{initialsOf(u.name || "?")}</div>
                       <div style={{ flex: 1 }}>
-                        <div style={styles.notifiedName}>{u.name || "Inconnu"}</div>
-                        <div style={styles.notifiedStatus}>Vu {fmtTime(u.updatedAt || now)}</div>
+                        <div style={styles.notifiedName}>{u.name || "Unknown"}</div>
+                        <div style={styles.notifiedStatus}>Seen {fmtTime(u.updatedAt || now)}</div>
                       </div>
-                      <span style={styles.safeTag}>Sûr</span>
+                      <span style={styles.safeTag}>Safe</span>
                     </div>
                   ))
               : contacts.map((c) => (
@@ -1062,7 +1062,7 @@ function FamilyView({ allUsers, currentUserId, contacts }) {
                       <div style={styles.notifiedName}>{c.name}</div>
                       <div style={styles.notifiedStatus}>{c.role}</div>
                     </div>
-                    <span style={styles.safeTag}>Sûr</span>
+                    <span style={styles.safeTag}>Safe</span>
                   </div>
                 ))}
           </div>
@@ -1145,7 +1145,7 @@ function LiveMapCanvas({ position, trail }) {
   return (
     <div style={styles.canvasWrap}>
       <canvas ref={canvasRef} width={340} height={280} style={styles.canvas} />
-      <div style={styles.canvasBadge}>Aperçu · à brancher sur Google Maps / Mapbox</div>
+      <div style={styles.canvasBadge}>Preview · connect to Google Maps / Mapbox</div>
     </div>
   );
 }
@@ -1160,11 +1160,11 @@ function ContactsModal({ contacts, onAdd, onRemove, onUpdatePhone, onClose }) {
     const trimmedName = name.trim();
     const trimmedPhone = digitsOnly(phone);
     if (!trimmedName) {
-      setError("Entre un nom.");
+      setError("Enter a name.");
       return;
     }
     if (!trimmedPhone || trimmedPhone.length < 8) {
-      setError("Entre un numéro WhatsApp valide, avec l'indicatif pays (ex: 92300xxxxxxx).");
+      setError("Enter a valid WhatsApp number, with country code (e.g. 92300xxxxxxx).");
       return;
     }
     onAdd(trimmedName, trimmedPhone);
@@ -1177,15 +1177,15 @@ function ContactsModal({ contacts, onAdd, onRemove, onUpdatePhone, onClose }) {
     <div style={styles.modalOverlay} onClick={onClose}>
       <div style={styles.modalSheet} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
-          <span style={styles.modalTitle}>Contacts d'urgence</span>
-          <button style={styles.modalClose} onClick={onClose} aria-label="Fermer">
+          <span style={styles.modalTitle}>Emergency contacts</span>
+          <button style={styles.modalClose} onClick={onClose} aria-label="Close">
             <X size={18} />
           </button>
         </div>
 
         <div style={styles.modalList}>
           {contacts.length === 0 && (
-            <div style={styles.modalEmpty}>Aucun contact pour l'instant. Ajoute-en un ci-dessous.</div>
+            <div style={styles.modalEmpty}>No contacts yet. Add one below.</div>
           )}
           {contacts.map((c) => (
             <div key={c.id} style={styles.modalRow}>
@@ -1194,13 +1194,13 @@ function ContactsModal({ contacts, onAdd, onRemove, onUpdatePhone, onClose }) {
                 <div style={styles.notifiedName}>{c.name}</div>
                 <input
                   type="tel"
-                  placeholder="Numéro WhatsApp (ex: 923001234567)"
+                  placeholder="WhatsApp number (e.g. 923001234567)"
                   value={c.phone || ""}
                   onChange={(e) => onUpdatePhone(c.id, e.target.value)}
                   style={styles.modalPhoneInput}
                 />
               </div>
-              <button style={styles.modalRemoveBtn} onClick={() => onRemove(c.id)} aria-label={`Supprimer ${c.name}`}>
+              <button style={styles.modalRemoveBtn} onClick={() => onRemove(c.id)} aria-label={`Remove ${c.name}`}>
                 <X size={14} />
               </button>
             </div>
@@ -1208,24 +1208,24 @@ function ContactsModal({ contacts, onAdd, onRemove, onUpdatePhone, onClose }) {
         </div>
 
         <div style={styles.modalAddSection}>
-          <div style={styles.modalAddTitle}>Ajouter un contact</div>
+          <div style={styles.modalAddTitle}>Add a contact</div>
           <input
             type="text"
-            placeholder="Nom"
+            placeholder="Name"
             value={name}
             onChange={(e) => setName(e.target.value)}
             style={styles.modalInput}
           />
           <input
             type="tel"
-            placeholder="Numéro WhatsApp avec indicatif (ex: 923001234567)"
+            placeholder="WhatsApp number with country code (e.g. 923001234567)"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             style={styles.modalInput}
           />
           {error && <div style={styles.modalError}>{error}</div>}
           <button style={styles.modalAddBtn} onClick={handleAdd}>
-            <UserPlus size={15} /> Ajouter
+            <UserPlus size={15} /> Add
           </button>
         </div>
       </div>
