@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Shield, MapPin, Users, Phone, X, Check, AlertTriangle, Radio, ChevronRight, UserPlus, Clock } from "lucide-react";
-import { pushLiveAlert, clearLiveAlert, subscribeLiveAlert } from "./firebase";
+import { pushUserLiveAlert, clearUserLiveAlert, subscribeAllUsers } from "./firebase";
 
 // ---------- Helpers ----------
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -54,7 +54,43 @@ const initialsOf = (name) =>
 
 const digitsOnly = (phone) => (phone || "").replace(/[^\d]/g, "");
 
+// ---------- Identity (no login — a locally-remembered "who is using this device") ----------
+const IDENTITY_KEY = "rakhwaal_identity_v1";
+
+const IDENTITY_PRESETS = [
+  { id: "shahmeer", name: "Shahmeer", initials: "SH" },
+  { id: "fizza", name: "Fizza", initials: "FZ" },
+  { id: "bilal", name: "Bilal", initials: "BL" },
+];
+
+const loadIdentity = () => {
+  try {
+    const raw = localStorage.getItem(IDENTITY_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    /* ignore */
+  }
+  return null;
+};
+
+const saveIdentity = (identity) => {
+  try {
+    localStorage.setItem(IDENTITY_KEY, JSON.stringify(identity));
+  } catch (e) {
+    /* ignore */
+  }
+};
+
+const clearIdentity = () => {
+  try {
+    localStorage.removeItem(IDENTITY_KEY);
+  } catch (e) {
+    /* ignore */
+  }
+};
+
 export default function RakhwaalApp() {
+  const [identity, setIdentity] = useState(loadIdentity);
   const [view, setView] = useState("user"); // "user" | "family"
   const [status, setStatus] = useState("safe"); // "safe" | "arming" | "active"
   const [holdProgress, setHoldProgress] = useState(0);
@@ -65,12 +101,12 @@ export default function RakhwaalApp() {
   const [locError, setLocError] = useState(null);
   const [now, setNow] = useState(Date.now());
   const [showContactsModal, setShowContactsModal] = useState(false);
-  const [liveAlert, setLiveAlert] = useState(null); // data read from Firebase — drives Family view
+  const [allUsers, setAllUsers] = useState({}); // data read from Firebase — every family member's live status
 
   // Subscribe once to the shared Firebase channel so the "Famille" view
-  // reflects whatever any device on this link has pushed.
+  // reflects every device that has an identity set on this link.
   useEffect(() => {
-    const unsubscribe = subscribeLiveAlert(setLiveAlert);
+    const unsubscribe = subscribeAllUsers(setAllUsers);
     return unsubscribe;
   }, []);
 
@@ -106,7 +142,7 @@ export default function RakhwaalApp() {
 
   // Geolocation watcher — active continuously once alert is triggered
   useEffect(() => {
-    if (status !== "active") return;
+    if (status !== "active" || !identity) return;
     if (!navigator.geolocation) {
       setLocError("blocked");
       return;
@@ -122,7 +158,8 @@ export default function RakhwaalApp() {
         setPosition(point);
         setPathTrail((prev) => {
           const nextTrail = [...prev.slice(-49), point];
-          pushLiveAlert({
+          pushUserLiveAlert(identity.id, {
+            name: identity.name,
             status: "active",
             position: point,
             trail: nextTrail,
@@ -142,11 +179,12 @@ export default function RakhwaalApp() {
     return () => {
       if (watchId.current != null) navigator.geolocation.clearWatch(watchId.current);
     };
-  }, [status]);
+  }, [status, identity]);
 
   // Demo fallback: lets the prototype be tested even when the sandboxed
   // preview blocks real geolocation (common inside embedded iframes).
   const useDemoLocation = useCallback(() => {
+    if (!identity) return;
     // Karachi, Pakistan (24.85970° N, 67.15353° E) — with tiny jitter so the trail line is visible
     const base = { lat: 24.8597, lng: 67.15353 };
     const point = {
@@ -159,7 +197,8 @@ export default function RakhwaalApp() {
     setPosition(point);
     setPathTrail((prev) => {
       const nextTrail = [...prev.slice(-49), point];
-      pushLiveAlert({
+      pushUserLiveAlert(identity.id, {
+        name: identity.name,
         status: "active",
         position: point,
         trail: nextTrail,
@@ -168,7 +207,7 @@ export default function RakhwaalApp() {
       });
       return nextTrail;
     });
-  }, [alertStart]);
+  }, [alertStart, identity]);
 
   useEffect(() => {
     if (status !== "active" || !locError) return;
@@ -211,13 +250,36 @@ export default function RakhwaalApp() {
     setPathTrail([]);
     setPosition(null);
     setHoldProgress(0);
-    clearLiveAlert();
+    if (identity) clearUserLiveAlert(identity.id, identity.name);
   };
+
+  const chooseIdentity = (person) => {
+    saveIdentity(person);
+    setIdentity(person);
+  };
+
+  const switchIdentity = () => {
+    clearIdentity();
+    setIdentity(null);
+    setStatus("safe");
+    setAlertStart(null);
+    setPathTrail([]);
+    setPosition(null);
+  };
+
+  if (!identity) {
+    return (
+      <div style={styles.app}>
+        <style>{fontImport}</style>
+        <IdentityPicker contacts={contacts} onChoose={chooseIdentity} />
+      </div>
+    );
+  }
 
   return (
     <div style={styles.app}>
       <style>{fontImport}</style>
-      <TopBar view={view} setView={setView} status={status} />
+      <TopBar view={view} setView={setView} status={status} identity={identity} onSwitchIdentity={switchIdentity} />
       {view === "user" ? (
         <UserView
           status={status}
@@ -234,7 +296,8 @@ export default function RakhwaalApp() {
         />
       ) : (
         <FamilyView
-          liveAlert={liveAlert}
+          allUsers={allUsers}
+          currentUserId={identity.id}
           contacts={contacts}
         />
       )}
@@ -252,28 +315,80 @@ export default function RakhwaalApp() {
 }
 
 // ---------------- Top bar ----------------
-function TopBar({ view, setView, status }) {
+function TopBar({ view, setView, status, identity, onSwitchIdentity }) {
   return (
     <div style={styles.topbar}>
       <div style={styles.brand}>
         <Shield size={20} color={colors.sand} strokeWidth={2.2} />
         <span style={styles.brandText}>Rakhwaal</span>
       </div>
-      <div style={styles.tabSwitch}>
-        <button
-          onClick={() => setView("user")}
-          style={{ ...styles.tabBtn, ...(view === "user" ? styles.tabBtnActive : {}) }}
-        >
-          Moi
-        </button>
-        <button
-          onClick={() => setView("family")}
-          style={{ ...styles.tabBtn, ...(view === "family" ? styles.tabBtnActive : {}) }}
-        >
-          Famille
-          {status === "active" && <span style={styles.dotAlert} />}
+      <div style={styles.topbarRight}>
+        <div style={styles.tabSwitch}>
+          <button
+            onClick={() => setView("user")}
+            style={{ ...styles.tabBtn, ...(view === "user" ? styles.tabBtnActive : {}) }}
+          >
+            Moi
+          </button>
+          <button
+            onClick={() => setView("family")}
+            style={{ ...styles.tabBtn, ...(view === "family" ? styles.tabBtnActive : {}) }}
+          >
+            Famille
+            {status === "active" && <span style={styles.dotAlert} />}
+          </button>
+        </div>
+        <button style={styles.identityBadge} onClick={onSwitchIdentity} title="Changer d'identité">
+          {identity.initials}
         </button>
       </div>
+    </div>
+  );
+}
+
+// ---------------- Identity picker (first launch) ----------------
+function IdentityPicker({ contacts, onChoose }) {
+  const [customName, setCustomName] = useState("");
+
+  return (
+    <div style={styles.identityWrap}>
+      <Shield size={36} color={colors.sand} strokeWidth={1.8} />
+      <div style={styles.identityTitle}>Rakhwaal</div>
+      <div style={styles.identitySub}>Qui utilise cet appareil ?</div>
+
+      <div style={styles.identityList}>
+        {IDENTITY_PRESETS.map((p) => (
+          <button key={p.id} style={styles.identityOption} onClick={() => onChoose(p)}>
+            <div style={styles.avatarSm}>{p.initials}</div>
+            <span>{p.name}</span>
+            <ChevronRight size={16} color={colors.muted} style={{ marginLeft: "auto" }} />
+          </button>
+        ))}
+      </div>
+
+      <div style={styles.identityCustomRow}>
+        <input
+          type="text"
+          placeholder="Autre nom…"
+          value={customName}
+          onChange={(e) => setCustomName(e.target.value)}
+          style={styles.modalInput}
+        />
+        <button
+          style={styles.identityCustomBtn}
+          onClick={() => {
+            const trimmed = customName.trim();
+            if (!trimmed) return;
+            onChoose({ id: trimmed.toLowerCase().replace(/\s+/g, "-") + "-" + uid().slice(0, 4), name: trimmed, initials: initialsOf(trimmed) });
+          }}
+        >
+          OK
+        </button>
+      </div>
+
+      <p style={styles.identityHint}>
+        Pas de mot de passe pour l'instant — juste pour savoir qui déclenche une alerte pendant les tests.
+      </p>
     </div>
   );
 }
@@ -457,39 +572,71 @@ function ActiveAlertPanel({ position, alertStart, now, locError, onResolve, cont
 }
 
 // ---------------- Family view ----------------
-function FamilyView({ liveAlert, contacts }) {
+function FamilyView({ allUsers, currentUserId, contacts }) {
   const [now, setNow] = useState(Date.now());
+  const [selectedId, setSelectedId] = useState(null);
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
 
-  const isActive = liveAlert && liveAlert.status === "active";
-  const position = liveAlert?.position || null;
-  const trail = liveAlert?.trail || [];
-  const alertStart = liveAlert?.alertStart || now;
+  const entries = Object.entries(allUsers || {}).map(([id, data]) => ({ id, ...data }));
+  const activeUsers = entries.filter((u) => u.status === "active");
+  const safeUsers = entries.filter((u) => u.status !== "active");
+
+  // Auto-select the first active user (or keep selection if still active)
+  useEffect(() => {
+    if (activeUsers.length === 0) {
+      setSelectedId(null);
+      return;
+    }
+    if (!activeUsers.find((u) => u.id === selectedId)) {
+      setSelectedId(activeUsers[0].id);
+    }
+  }, [allUsers]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const selected = activeUsers.find((u) => u.id === selectedId) || activeUsers[0] || null;
 
   return (
     <div style={styles.familyWrap}>
-      {isActive ? (
+      {activeUsers.length > 0 ? (
         <>
+          {activeUsers.length > 1 && (
+            <div style={styles.multiAlertTabs}>
+              {activeUsers.map((u) => (
+                <button
+                  key={u.id}
+                  onClick={() => setSelectedId(u.id)}
+                  style={{
+                    ...styles.multiAlertTab,
+                    ...(u.id === selected?.id ? styles.multiAlertTabActive : {}),
+                  }}
+                >
+                  {u.name || "Inconnu"}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div style={styles.familyAlertBanner}>
             <div style={styles.pulseDot} />
             <div>
-              <div style={styles.activeTitle}>Alerte SOS déclenchée</div>
-              <div style={styles.activeSub}>Il y a {fmtElapsed(alertStart)}</div>
+              <div style={styles.activeTitle}>
+                {selected.name || "Quelqu'un"} a déclenché une alerte SOS
+              </div>
+              <div style={styles.activeSub}>Il y a {fmtElapsed(selected.alertStart || now)}</div>
             </div>
           </div>
 
-          <LiveMapCanvas position={position} trail={trail} />
+          <LiveMapCanvas position={selected.position} trail={selected.trail || []} />
 
           <div style={styles.actionRow}>
             <a href="tel:15" style={styles.callBtn}>
               <Phone size={16} /> Appeler
             </a>
-            {position && (
+            {selected.position && (
               <a
-                href={`https://www.google.com/maps?q=${position.lat},${position.lng}`}
+                href={`https://www.google.com/maps?q=${selected.position.lat},${selected.position.lng}`}
                 target="_blank"
                 rel="noreferrer"
                 style={styles.mapsBtn}
@@ -501,7 +648,7 @@ function FamilyView({ liveAlert, contacts }) {
 
           <div style={styles.trailInfo}>
             <Radio size={14} color={colors.safe} />
-            <span>{trail.length} points GPS reçus en direct</span>
+            <span>{(selected.trail || []).length} points GPS reçus en direct</span>
           </div>
         </>
       ) : (
@@ -512,16 +659,29 @@ function FamilyView({ liveAlert, contacts }) {
             Vous serez notifié instantanément si un membre de votre famille déclenche le SOS.
           </div>
           <div style={styles.watchList}>
-            {contacts.map((c) => (
-              <div key={c.id} style={styles.watchRow}>
-                <div style={styles.avatarSm}>{c.initials}</div>
-                <div style={{ flex: 1 }}>
-                  <div style={styles.notifiedName}>{c.name}</div>
-                  <div style={styles.notifiedStatus}>{c.role}</div>
-                </div>
-                <span style={styles.safeTag}>Sûr</span>
-              </div>
-            ))}
+            {safeUsers.length > 0
+              ? safeUsers
+                  .filter((u) => u.id !== currentUserId)
+                  .map((u) => (
+                    <div key={u.id} style={styles.watchRow}>
+                      <div style={styles.avatarSm}>{initialsOf(u.name || "?")}</div>
+                      <div style={{ flex: 1 }}>
+                        <div style={styles.notifiedName}>{u.name || "Inconnu"}</div>
+                        <div style={styles.notifiedStatus}>Vu {fmtTime(u.updatedAt || now)}</div>
+                      </div>
+                      <span style={styles.safeTag}>Sûr</span>
+                    </div>
+                  ))
+              : contacts.map((c) => (
+                  <div key={c.id} style={styles.watchRow}>
+                    <div style={styles.avatarSm}>{c.initials}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={styles.notifiedName}>{c.name}</div>
+                      <div style={styles.notifiedStatus}>{c.role}</div>
+                    </div>
+                    <span style={styles.safeTag}>Sûr</span>
+                  </div>
+                ))}
           </div>
         </div>
       )}
@@ -731,6 +891,89 @@ const styles = {
     fontWeight: 700,
     fontSize: 18,
     letterSpacing: "-0.01em",
+  },
+  topbarRight: { display: "flex", alignItems: "center", gap: 10 },
+  identityBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: "50%",
+    background: colors.bgElevated,
+    border: `1px solid ${colors.border}`,
+    color: colors.sand,
+    fontSize: 11,
+    fontWeight: 700,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontFamily: "'Inter', sans-serif",
+  },
+  multiAlertTabs: { display: "flex", gap: 6, marginBottom: 2, flexWrap: "wrap" },
+  multiAlertTab: {
+    background: colors.bgElevated,
+    border: `1px solid ${colors.border}`,
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: 600,
+    padding: "6px 12px",
+    borderRadius: 999,
+    cursor: "pointer",
+    fontFamily: "'Inter', sans-serif",
+  },
+  multiAlertTabActive: {
+    background: colors.alertDim,
+    borderColor: "rgba(232,56,79,0.4)",
+    color: colors.alert,
+  },
+  identityWrap: {
+    flex: 1,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    padding: "64px 28px 40px",
+    gap: 4,
+  },
+  identityTitle: {
+    fontFamily: "'Space Grotesk', sans-serif",
+    fontWeight: 700,
+    fontSize: 20,
+    marginTop: 12,
+  },
+  identitySub: { color: colors.muted, fontSize: 13, marginBottom: 28 },
+  identityList: { width: "100%", display: "flex", flexDirection: "column", gap: 8 },
+  identityOption: {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    width: "100%",
+    background: colors.bgElevated,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 12,
+    padding: "13px 14px",
+    color: colors.sand,
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: "pointer",
+    fontFamily: "'Inter', sans-serif",
+  },
+  identityCustomRow: { display: "flex", gap: 8, width: "100%", marginTop: 20 },
+  identityCustomBtn: {
+    background: colors.safe,
+    color: "#0E1913",
+    border: "none",
+    borderRadius: 9,
+    padding: "0 18px",
+    fontWeight: 700,
+    fontSize: 13,
+    cursor: "pointer",
+    fontFamily: "'Inter', sans-serif",
+  },
+  identityHint: {
+    color: colors.mutedDeep,
+    fontSize: 11.5,
+    textAlign: "center",
+    marginTop: 28,
+    lineHeight: 1.5,
   },
   tabSwitch: {
     display: "flex",

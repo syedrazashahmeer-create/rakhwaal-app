@@ -17,18 +17,20 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-// Single shared "live" channel for this family test group.
-// In a production version this would be scoped per-family with auth.
-const LIVE_PATH = "live/alert";
+// Each family member gets their own node under live/users/{userId}, so
+// several people can have an active alert at the same time without
+// overwriting each other. No auth — userId is a locally-chosen identity.
+const USERS_PATH = "live/users";
 
-export function pushLiveAlert(data) {
-  return set(ref(db, LIVE_PATH), data).catch((err) => {
+export function pushUserLiveAlert(userId, data) {
+  return set(ref(db, `${USERS_PATH}/${userId}`), data).catch((err) => {
     console.error("Firebase write failed:", err);
   });
 }
 
-export function clearLiveAlert() {
-  return set(ref(db, LIVE_PATH), {
+export function clearUserLiveAlert(userId, name) {
+  return set(ref(db, `${USERS_PATH}/${userId}`), {
+    name,
     status: "safe",
     updatedAt: Date.now(),
   }).catch((err) => {
@@ -36,17 +38,18 @@ export function clearLiveAlert() {
   });
 }
 
-export function subscribeLiveAlert(callback) {
-  const liveRef = ref(db, LIVE_PATH);
+export function subscribeAllUsers(callback) {
+  const usersRef = ref(db, USERS_PATH);
   onValue(
-    liveRef,
+    usersRef,
     (snapshot) => {
-      callback(snapshot.val());
+      callback(snapshot.val() || {});
     },
     (err) => {
       console.error("Firebase read failed:", err);
-      callback(null);
+      callback({});
     }
   );
-  return () => off(liveRef);
+  return () => off(usersRef);
 }
+
