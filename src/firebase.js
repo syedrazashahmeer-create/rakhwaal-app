@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, set, get, onValue, off } from "firebase/database";
+import { getDatabase, ref, set, get, push, remove, onValue, onChildAdded, off } from "firebase/database";
 
 // Firebase config for the Rakhwaal test project.
 // NOTE: this apiKey is a public client identifier, not a secret — Firebase
@@ -110,5 +110,71 @@ export async function getAdminPasswordHash() {
 
 export async function setAdminPasswordHash(hash) {
   return set(ref(db, ADMIN_PATH), hash);
+}
+
+// ---------------- WebRTC signaling (front-camera preview during an SOS) ----------------
+// Firebase only carries the connection setup (offer/answer/ICE candidates);
+// the actual video stream flows directly device-to-device (peer-to-peer),
+// never through Firebase itself. No TURN server is configured, so this can
+// fail to connect on some strict networks/firewalls — best-effort only.
+const webrtcPath = (broadcasterId) => `live/users/${broadcasterId}/webrtc`;
+
+export function announceViewer(broadcasterId, viewerId) {
+  return set(ref(db, `${webrtcPath(broadcasterId)}/viewers/${viewerId}`), true);
+}
+
+export function removeViewer(broadcasterId, viewerId) {
+  return remove(ref(db, `${webrtcPath(broadcasterId)}/viewers/${viewerId}`)).catch(() => {});
+}
+
+export function subscribeViewers(broadcasterId, onViewerJoin) {
+  const viewersRef = ref(db, `${webrtcPath(broadcasterId)}/viewers`);
+  onChildAdded(viewersRef, (snapshot) => {
+    onViewerJoin(snapshot.key);
+  });
+  return () => off(viewersRef);
+}
+
+export function writeOffer(broadcasterId, viewerId, offer) {
+  return set(ref(db, `${webrtcPath(broadcasterId)}/offers/${viewerId}`), offer);
+}
+
+export function subscribeOffer(broadcasterId, viewerId, callback) {
+  const offerRef = ref(db, `${webrtcPath(broadcasterId)}/offers/${viewerId}`);
+  onValue(offerRef, (snapshot) => {
+    if (snapshot.val()) callback(snapshot.val());
+  });
+  return () => off(offerRef);
+}
+
+export function writeAnswer(broadcasterId, viewerId, answer) {
+  return set(ref(db, `${webrtcPath(broadcasterId)}/answers/${viewerId}`), answer);
+}
+
+export function subscribeAnswer(broadcasterId, viewerId, callback) {
+  const answerRef = ref(db, `${webrtcPath(broadcasterId)}/answers/${viewerId}`);
+  onValue(answerRef, (snapshot) => {
+    if (snapshot.val()) callback(snapshot.val());
+  });
+  return () => off(answerRef);
+}
+
+export function pushIceCandidate(broadcasterId, fromRole, viewerId, candidate) {
+  // fromRole is "broadcaster" or "viewer" — keeps the two ICE streams separate
+  const path = `${webrtcPath(broadcasterId)}/ice-from-${fromRole}/${viewerId}`;
+  return push(ref(db, path), candidate.toJSON ? candidate.toJSON() : candidate);
+}
+
+export function subscribeIceCandidates(broadcasterId, fromRole, viewerId, callback) {
+  const path = `${webrtcPath(broadcasterId)}/ice-from-${fromRole}/${viewerId}`;
+  const candidatesRef = ref(db, path);
+  onChildAdded(candidatesRef, (snapshot) => {
+    callback(snapshot.val());
+  });
+  return () => off(candidatesRef);
+}
+
+export function clearWebrtcSession(broadcasterId) {
+  return remove(ref(db, webrtcPath(broadcasterId))).catch(() => {});
 }
 

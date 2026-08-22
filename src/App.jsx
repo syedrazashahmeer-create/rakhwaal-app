@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Shield, MapPin, Users, Phone, X, Check, AlertTriangle, Radio, ChevronRight, UserPlus, Clock, Eye } from "lucide-react";
-import { pushUserLiveAlert, clearUserLiveAlert, subscribeAllUsers, subscribeProfileList, getProfile, createProfile, saveProfileContacts, getAdminPasswordHash, setAdminPasswordHash } from "./firebase";
+import { pushUserLiveAlert, clearUserLiveAlert, subscribeAllUsers, subscribeProfileList, getProfile, createProfile, saveProfileContacts, getAdminPasswordHash, setAdminPasswordHash, subscribeViewers, announceViewer, removeViewer, clearWebrtcSession } from "./firebase";
+import { createBroadcasterConnection, createViewerConnection } from "./webrtc";
 
 // ---------- Helpers ----------
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -164,6 +165,13 @@ export default function RakhwaalApp() {
   const watchId = useRef(null);
   const HOLD_MS = 1800;
 
+  // Front-camera broadcast (SOS only) — local stream + per-viewer peer connections
+  const localStreamRef = useRef(null);
+  const viewersUnsubRef = useRef(null);
+  const peerConnectionsRef = useRef({});
+  const [localStream, setLocalStream] = useState(null);
+  const [camError, setCamError] = useState(null);
+
   // Tick clock for elapsed-time display
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -247,6 +255,46 @@ export default function RakhwaalApp() {
     return () => clearInterval(t);
   }, [status, locError, useDemoLocation]);
 
+  // Opens the front camera and starts broadcasting it to any family member
+  // who opens this profile's live view. Best-effort — if camera access
+  // fails or is denied, the rest of the SOS flow still works normally.
+  const startCamera = useCallback(async () => {
+    if (!identity) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user" },
+        audio: false,
+      });
+      localStreamRef.current = stream;
+      setLocalStream(stream);
+      setCamError(null);
+
+      viewersUnsubRef.current = subscribeViewers(identity.id, (viewerId) => {
+        if (peerConnectionsRef.current[viewerId]) return; // already connected to this viewer
+        peerConnectionsRef.current[viewerId] = createBroadcasterConnection(identity.id, viewerId, stream);
+      });
+    } catch (err) {
+      console.warn("Camera unavailable:", err);
+      setCamError(err?.name === "NotAllowedError" ? "denied" : "unavailable");
+    }
+  }, [identity]);
+
+  const stopCamera = useCallback(() => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((t) => t.stop());
+      localStreamRef.current = null;
+    }
+    setLocalStream(null);
+    setCamError(null);
+    if (viewersUnsubRef.current) {
+      viewersUnsubRef.current();
+      viewersUnsubRef.current = null;
+    }
+    Object.values(peerConnectionsRef.current).forEach((cleanup) => cleanup());
+    peerConnectionsRef.current = {};
+    if (identity) clearWebrtcSession(identity.id);
+  }, [identity]);
+
   const startHold = useCallback(() => {
     if (status === "active") return;
     setStatus("arming");
@@ -262,6 +310,7 @@ export default function RakhwaalApp() {
       setHoldProgress(100);
       clearInterval(holdInterval.current);
       if (navigator.vibrate) navigator.vibrate([80, 40, 80, 40, 200]);
+      startCamera();
 
       // Auto-open a WhatsApp draft per contact with a saved number.
       // Browsers may block more than one automatic popup — any that get
@@ -279,7 +328,7 @@ export default function RakhwaalApp() {
           }, i * 250);
         });
     }, HOLD_MS);
-  }, [status, contacts, identity]);
+  }, [status, contacts, identity, startCamera]);
 
   const cancelHold = useCallback(() => {
     if (status === "arming") {
@@ -296,6 +345,7 @@ export default function RakhwaalApp() {
     setPathTrail([]);
     setPosition(null);
     setHoldProgress(0);
+    stopCamera();
     if (identity) clearUserLiveAlert(identity.id, identity.name);
   };
 
@@ -306,6 +356,7 @@ export default function RakhwaalApp() {
   };
 
   const switchIdentity = () => {
+    stopCamera();
     clearIdentity();
     setIdentity(null);
     setStatus("safe");
@@ -340,6 +391,8 @@ export default function RakhwaalApp() {
           locError={locError}
           contacts={contacts}
           identity={identity}
+          localStream={localStream}
+          camError={camError}
           onManageContacts={() => setShowContactsModal(true)}
         />
       ) : (
@@ -784,7 +837,7 @@ function AdminPanel({ onClose }) {
 }
 
 
-function UserView({ status, holdProgress, onStart, onCancel, onResolve, position, alertStart, now, locError, contacts, identity, onManageContacts }) {
+function UserView({ status, holdProgress, onStart, onCancel, onResolve, position, alertStart, now, locError, contacts, identity, localStream, camError, onManageContacts }) {
   return (
     <div style={styles.userWrap}>
       {status !== "active" ? (
@@ -880,13 +933,23 @@ function UserView({ status, holdProgress, onStart, onCancel, onResolve, position
           onResolve={onResolve}
           contacts={contacts}
           identity={identity}
+          localStream={localStream}
+          camError={camError}
         />
       )}
     </div>
   );
 }
 
-function ActiveAlertPanel({ position, alertStart, now, locError, onResolve, contacts, identity }) {
+function ActiveAlertPanel({ position, alertStart, now, locError, onResolve, contacts, identity, localStream, camError }) {
+  const videoRef = useRef(null);
+
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.srcObject = localStream || null;
+    }
+  }, [localStream]);
+
   return (
     <div style={styles.activePanel}>
       <div style={styles.activeHeader}>
@@ -895,6 +958,24 @@ function ActiveAlertPanel({ position, alertStart, now, locError, onResolve, cont
           <div style={styles.activeTitle}>Alert active</div>
           <div style={styles.activeSub}>Sent to {contacts.length} contacts · {fmtElapsed(alertStart || now)}</div>
         </div>
+      </div>
+
+      <div style={styles.cameraPreviewWrap}>
+        {localStream ? (
+          <video ref={videoRef} autoPlay playsInline muted style={styles.cameraPreviewVideo} />
+        ) : (
+          <div style={styles.cameraPreviewFallback}>
+            <Eye size={18} color={colors.muted} />
+            <span>
+              {camError === "denied"
+                ? "Camera permission denied"
+                : camError === "unavailable"
+                ? "Camera unavailable on this device"
+                : "Starting camera…"}
+            </span>
+          </div>
+        )}
+        {localStream && <div style={styles.cameraLiveBadge}>● Live to family</div>}
       </div>
 
       <div style={styles.mapPlaceholder}>
@@ -1013,6 +1094,8 @@ function FamilyView({ allUsers, currentUserId, contacts }) {
 
           <LiveMapCanvas position={selected.position} trail={selected.trail || []} />
 
+          <RemoteCameraView key={selected.id} broadcasterId={selected.id} viewerId={currentUserId} />
+
           <div style={styles.actionRow}>
             <a href="tel:15" style={styles.callBtn}>
               <Phone size={16} /> Call
@@ -1068,6 +1151,42 @@ function FamilyView({ allUsers, currentUserId, contacts }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// Watches a specific broadcaster's front camera via a WebRTC peer connection,
+// signaled through Firebase. Best-effort — falls back to a "connecting"
+// state if the peer connection can't establish (e.g. no camera, or a
+// restrictive network with no TURN server available).
+function RemoteCameraView({ broadcasterId, viewerId }) {
+  const videoRef = useRef(null);
+  const [hasStream, setHasStream] = useState(false);
+
+  useEffect(() => {
+    if (!broadcasterId || !viewerId) return;
+    setHasStream(false);
+    announceViewer(broadcasterId, viewerId);
+    const cleanup = createViewerConnection(broadcasterId, viewerId, (stream) => {
+      if (videoRef.current) videoRef.current.srcObject = stream;
+      setHasStream(true);
+    });
+    return () => {
+      cleanup();
+      removeViewer(broadcasterId, viewerId);
+    };
+  }, [broadcasterId, viewerId]);
+
+  return (
+    <div style={styles.cameraPreviewWrap}>
+      <video ref={videoRef} autoPlay playsInline style={styles.cameraPreviewVideo} />
+      {!hasStream && (
+        <div style={styles.cameraPreviewFallback}>
+          <Eye size={18} color={colors.muted} />
+          <span>Connecting to camera…</span>
+        </div>
+      )}
+      {hasStream && <div style={styles.cameraLiveBadge}>● Live</div>}
     </div>
   );
 }
@@ -1687,6 +1806,45 @@ const styles = {
     fontSize: 15,
   },
   activeSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
+  cameraPreviewWrap: {
+    position: "relative",
+    width: "100%",
+    aspectRatio: "4 / 3",
+    borderRadius: 14,
+    overflow: "hidden",
+    background: "#0D1017",
+    border: `1px solid ${colors.border}`,
+  },
+  cameraPreviewVideo: {
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
+    display: "block",
+    background: "#0D1017",
+  },
+  cameraPreviewFallback: {
+    position: "absolute",
+    inset: 0,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    fontSize: 12,
+    color: colors.muted,
+    background: "#0D1017",
+  },
+  cameraLiveBadge: {
+    position: "absolute",
+    top: 10,
+    left: 10,
+    fontSize: 10.5,
+    fontWeight: 700,
+    color: "#fff",
+    background: "rgba(232,56,79,0.85)",
+    padding: "3px 9px",
+    borderRadius: 999,
+  },
   mapPlaceholder: {
     background: colors.bgElevated,
     border: `1px solid ${colors.border}`,
